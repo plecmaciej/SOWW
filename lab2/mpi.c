@@ -36,7 +36,7 @@ long FindTwinPrimes(long start, long end) {
 		start = 3;
 	}
 	
-	if (start % 2 == 1){
+	if (start % 2 == 0){
 
 		begin = start + 1;
 	}
