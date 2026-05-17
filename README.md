@@ -4,10 +4,11 @@
 
 This repository contains solutions and materials for laboratory classes in **High Performance Computing (HPC)**.
 
-The labs focus on parallel programming using **MPI (Message Passing Interface)** and aim to introduce fundamental concepts such as:
+The labs focus on parallel programming using **MPI (Message Passing Interface)** and **OpenMP** and aim to introduce fundamental concepts such as:
 
 * distributed computation
 * process communication
+* shared memory parallelism
 * performance analysis
 
 ---
@@ -173,29 +174,6 @@ mpirun -np 2
 mpirun -np 4
 mpirun -np 8
 ```
-
----
-
-## 📊 Performance Testing
-
-The purpose of the lab was also to analyze **execution time vs number of processes**.
-
-### Key observations:
-
-* Increasing processes reduces computation time
-* Speedup is not linear due to:
-
-  * communication overhead
-  * synchronization costs
-  * hardware limitations
-
----
-
-## 📎 Notes
-
-* The program uses a **simple but effective parallelization strategy**
-* Further optimizations are possible (e.g. more advanced prime sieves), but not required for this task
-* Designed to run in a Linux environment with OpenMPI
 
 ---
 
@@ -369,24 +347,6 @@ make run 10000000 L2
 | Communication | Collective | Point-to-point |
 | Load balancing | Moderate | Improved |
 | Complexity | Simple | More advanced |
-
----
-
-## 📊 Performance Insights
-
-* Dynamic scheduling improves efficiency when workloads are uneven
-* Better utilization of processes compared to static distribution
-* Additional communication overhead due to frequent messaging
-* Suitable for problems with unpredictable computation time
-
----
-
-## 📎 Notes
-
-* Demonstrates a classic master-slave parallel pattern
-* Useful for irregular or imbalanced workloads
-* Can be extended with adaptive chunk sizes or task queues
-* More scalable for complex real-world problems than static approaches
 
 ---
 
@@ -624,51 +584,189 @@ make run 10000000 L3
 
 ---
 
-## 📊 Performance Insights
+## Lab 4 – OpenMP Twin Prime Counting
 
-* **Pipelining advantage**: Computation and communication overlap
-  * While slave A computes, slave B receives new data
-  * Master can send to slave C while waiting for results
+The goal of this exercise was to implement a **parallel program using OpenMP (shared memory parallelism)** that computes the number of **twin prime pairs** in a given range.
 
-* Non-blocking communication reduces:
-  * Idle waiting time
-  * Total execution time
-  * Overall latency
+The program takes a single input value `N` and counts how many twin primes exist in the interval:
 
-* Better scalability:
-  * Especially beneficial for larger numbers of processes
-  * Amortizes communication overhead
+```
+[1, N]
+```
 
-* Improvements over Lab 2:
-  * ~20-50% faster for typical workloads
-  * Better CPU utilization
-  * Reduced synchronization bottlenecks
+Twin primes are pairs of prime numbers that differ by 2, for example:
+
+```
+(3, 5), (5, 7), (11, 13)
+```
 
 ---
 
-## 🎓 Key Concepts
+## ⚙️ Technologies
 
-### Non-Blocking vs Blocking
-* **Blocking**: Function returns only when operation completes (waits)
-* **Non-blocking**: Function returns immediately, operation happens in background
-
-### Pipelining in MPI
-Three-phase pattern used by slaves:
-1. **Prepare**: Issue `MPI_Irecv` and `MPI_Isend` asynchronously
-2. **Compute**: Do work while network handles communication
-3. **Synchronize**: Wait for all operations with `MPI_Waitall`
-
-### MPI_Waitany vs MPI_Wait
-* **MPI_Wait**: Wait for specific operation to complete
-* **MPI_Waitany**: Wait for any one operation from a set to complete
-* **MPI_Waitall**: Wait for all operations in a set to complete
+* C
+* OpenMP
+* Makefile
+* Linux environment
 
 ---
 
-## 📎 Notes
+## How It Works
 
-* Demonstrates advanced non-blocking MPI communication patterns
-* Shows practical application of pipelining in parallel programs
-* Suitable for problems requiring high communication frequency
-* Better scalability than blocking communication for larger clusters
-* Essential pattern for high-performance parallel computing
+This implementation uses **OpenMP (Open Multi-Processing)** for shared memory parallelism, where:
+
+* **Multiple threads** work on shared data within a single process
+* No message passing required (unlike MPI)
+* Simpler programming model than distributed memory approaches
+* Suitable for multi-core systems within a single machine
+
+---
+
+### 1. Initialization
+
+The program sets the number of threads using:
+
+```c
+omp_set_num_threads(ins__args.n_thr);
+```
+
+This sets the number of parallel threads that will be used during execution.
+
+---
+
+### 2. Initialization of Twin Primes Count
+
+To handle the special case of the first twin prime pair (3, 5):
+
+```c
+long total_twin_primes = 1;
+```
+
+The counter is initialized to 1, accounting for the pair (3, 5) which is already counted before the parallel loop begins.
+
+---
+
+### 3. Optimized Twin Prime Checking
+
+The algorithm uses an efficient optimization based on the mathematical property that all twin primes (except 3, 5) follow the pattern:
+
+```c
+for( i = 6; i < inputArgument; i += 6 )
+```
+
+This means:
+* Process pairs at positions of form `6k-1` and `6k+1`
+* First iteration checks: `(5, 7), (11, 13), (17, 19), ...`
+* Second iteration checks: `(11, 13), (17, 19), (23, 25), ...`
+* etc.
+
+Why this works:
+* All integers can be expressed as `6k`, `6k+1`, `6k+2`, `6k+3`, `6k+4`, or `6k+5`
+* Only `6k-1` and `6k+1` can both be prime (other forms are always divisible by 2 or 3)
+* Reduces search space by a factor of 6 compared to checking all numbers
+
+---
+
+### 4. Prime Number Check
+
+Each thread checks whether numbers are prime using an optimized function:
+
+```c
+bool isPrime(int i)
+```
+
+Optimizations:
+
+* skips even numbers
+* checks divisibility only up to √n
+* iterates with step `2` (only odd divisors)
+* handles special cases (2 and 3 implicitly)
+
+---
+
+### 5. Parallel Loop with OpenMP
+
+The main computation is parallelized using a parallel for loop:
+
+```c
+#pragma omp parallel for private(result) reduction(+:total_twin_primes)
+for( i = 6; i < inputArgument; i += 6 ) {
+    result = 0;
+    if (isPrime(i-1) && isPrime(i + 1)) {
+        result++;
+    }
+    total_twin_primes = total_twin_primes + result;
+}
+```
+
+Key directives:
+
+* `#pragma omp parallel for` → parallelize the loop across available threads
+* `private(result)` → each thread has its own copy of `result` variable
+* `reduction(+:total_twin_primes)` → safely accumulate results from all threads using addition
+
+How it works:
+
+* The loop iterations are distributed among threads (static or dynamic scheduling)
+* Each thread independently checks pairs for primality
+* Results are combined using a thread-safe reduction operation
+* No data race conditions occur due to the `reduction` clause
+
+---
+
+## 🛠 Build & Run
+
+### Build
+
+```bash
+make
+```
+
+### Run
+
+```bash
+make run <N> <MARKER> <NUM_THREADS>
+```
+
+Example:
+
+```bash
+make run 10000000 L4 4
+```
+
+---
+
+## ⚡ Changing Number of Threads
+
+The number of threads can be specified via command-line argument:
+
+```bash
+./openmp --arg 10000000 --marker L4 --n_thr 1
+./openmp --arg 10000000 --marker L4 --n_thr 2
+./openmp --arg 10000000 --marker L4 --n_thr 4
+./openmp --arg 10000000 --marker L4 --n_thr 8
+```
+
+Or via the `OMP_NUM_THREADS` environment variable:
+
+```bash
+export OMP_NUM_THREADS=4
+./openmp --arg 10000000 --marker L4
+```
+
+---
+
+## ⚡ Key Differences from Previous Labs
+
+| Feature | Lab 1 (MPI Reduce) | Lab 2 (MPI Master-Slave) | Lab 3 (MPI Non-Blocking) | Lab 4 (OpenMP) |
+|---|---|---|---|---|
+| Parallelism model | Distributed memory | Distributed memory | Distributed memory | Shared memory |
+| Communication | Collective reduction | Point-to-point blocking | Point-to-point non-blocking | None (shared variables) |
+| Work distribution | Static (cyclic) | Dynamic (on demand) | Dynamic with pipelining | Static or dynamic scheduling |
+| Communication overhead | Low (MPI_Reduce) | Moderate (frequent messaging) | Low (pipelined) | Very low (shared memory) |
+| Ease of use | Medium | Medium | Complex | Simple |
+| Scalability (single machine) | Limited | Limited | Limited | Excellent |
+
+---
+
+
