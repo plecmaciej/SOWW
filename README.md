@@ -769,4 +769,314 @@ export OMP_NUM_THREADS=4
 
 ---
 
+## Lab 5 – Hybrid MPI + OpenMP Twin Prime Counting
+
+The goal of this exercise was to implement a **hybrid parallel program combining both MPI (distributed memory) and OpenMP (shared memory)** that computes the number of **twin prime pairs** in a given range.
+
+The program takes a single input value `N` and counts how many twin primes exist in the interval:
+
+```
+[1, N]
+```
+
+Twin primes are pairs of prime numbers that differ by 2, for example:
+
+```
+(3, 5), (5, 7), (11, 13)
+```
+
+---
+
+## ⚙️ Technologies
+
+* C
+* MPI (OpenMPI)
+* OpenMP
+* Makefile
+* Linux environment
+
+---
+
+## How It Works
+
+This implementation combines **MPI for inter-process communication** and **OpenMP for intra-process parallelism**, where:
+
+* **Each MPI process** controls multiple OpenMP threads
+* **MPI processes** are distributed across machines or cores
+* **OpenMP threads** within each process work on shared memory
+* Data is partitioned among MPI processes, then each process uses OpenMP to parallelize its portion
+
+This is a **hybrid approach** that leverages both distributed and shared memory parallelism.
+
+---
+
+### 1. MPI Initialization with Threading Support
+
+The program initializes MPI with thread support:
+
+```c
+int threadsupport;
+MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &threadsupport);
+
+if (threadsupport < MPI_THREAD_FUNNELED) {
+    printf("\nThe implementation does not support MPI_THREAD_FUNNELED, it supports level %d\n", threadsupport);
+    MPI_Finalize();
+    return -1;
+}
+```
+
+Key points:
+
+* `MPI_Init_thread()` instead of `MPI_Init()` allows threading
+* `MPI_THREAD_FUNNELED` level means only the main thread calls MPI functions
+* Verification ensures the system supports the required threading level
+
+---
+
+### 2. OpenMP Thread Setup
+
+The number of OpenMP threads is set:
+
+```c
+omp_set_num_threads(ins__args.n_thr);
+```
+
+This determines how many threads each MPI process will spawn.
+
+---
+
+### 3. MPI Process and Rank Information
+
+Standard MPI initialization:
+
+```c
+MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
+MPI_Comm_size(MPI_COMM_WORLD, &nproc);
+```
+
+* `myrank` → unique ID of current MPI process
+* `nproc` → total number of MPI processes
+
+---
+
+### 4. Work Distribution Between MPI Processes
+
+The work is statically divided among MPI processes:
+
+```c
+step = (double) inputArgument / nproc;
+calculate(myrank);
+```
+
+Each process gets a range `[start, end]`:
+
+* Process 0: `[0, step)`
+* Process 1: `[step, 2*step)`
+* Process 2: `[2*step, 3*step)`
+* etc.
+
+---
+
+### 5. Calculate Function with OpenMP Parallelization
+
+Each MPI process executes its own portion using OpenMP parallelism:
+
+```c
+void calculate(int rank) {
+    long result;
+    long total_result = 0;
+    int start = rank * step;
+    
+    // Align start to 6k pattern for optimization
+    if (start % 6 != 0)
+        start = start + (6 - start % 6);
+
+    int end = rank * step + step;
+    int i = 0;
+
+    #pragma omp parallel for private(result) reduction(+:total_result)
+    for(i = start; i < end; i += 6) {
+        result = 0;
+
+        if (isPrime(i-1) && isPrime(i + 1)) {
+            result++;
+        }
+
+        total_result = total_result + result;
+    }
+
+    MPI_Send(&total_result, 1, MPI_LONG, 0, RESULT, MPI_COMM_WORLD);
+}
+```
+
+Key features:
+
+* **Range alignment**: Each process adjusts its start to the `6k` pattern
+* **OpenMP parallelization**: The loop `for(i = start; i < end; i += 6)` is parallelized
+* **Thread-safe reduction**: `reduction(+:total_result)` safely combines partial results from all threads
+* **Result sending**: Each process sends its result back to rank 0 using MPI
+
+---
+
+### 6. Optimized Twin Prime Checking (6k±1 Pattern)
+
+As in Lab 4, the algorithm exploits the mathematical property:
+
+```c
+for(i = start; i < end; i += 6)
+```
+
+All twin primes (except 3, 5) follow the form `(6k-1, 6k+1)`. This reduces the search space by a factor of 6.
+
+---
+
+### 7. Prime Number Check
+
+Each thread checks primality:
+
+```c
+bool isPrime(int i) {
+    long sqrttt = sqrt(i);
+    for (int j = 5; j <= sqrttt; j += 2) {
+        if (i % j == 0) return false;
+    }
+    return true;
+}
+```
+
+Optimizations:
+* Checks divisibility only up to √n
+* Iterates with step 2 (only odd divisors)
+
+---
+
+### 8. Result Collection (Master Process)
+
+Only process 0 collects results from all other processes:
+
+```c
+if (!myrank) {
+    long resulttemp;
+    for (i = 0; i < nproc; i++) {
+        MPI_Recv(&resulttemp, 1, MPI_LONG, i, RESULT, MPI_COMM_WORLD, &status);
+        printf("\nReceived result %ld for process %d\n", resulttemp, i);
+        fflush(stdout);
+        result_final += resulttemp;
+    }
+
+    printf("\nHi, I am process 0, the result is %ld\n", result_final);
+}
+```
+
+Process 0:
+* Receives results from all processes (including itself)
+* Accumulates partial results
+* Prints the final total
+
+---
+
+### 9. Output and Timing
+
+Timing is measured only on process 0:
+
+```c
+if(!myrank) {
+    gettimeofday(&ins__tstart, NULL);
+}
+
+// ... computation ...
+
+if (!myrank) {
+    gettimeofday(&ins__tstop, NULL);
+    ins__printtime(&ins__tstart, &ins__tstop, ins__args.marker);
+}
+```
+
+---
+
+## 🛠 Build & Run
+
+### Build
+
+```bash
+make
+```
+
+### Run Locally (Single Machine)
+
+```bash
+make run <N> <MARKER> <NUM_THREADS> <NUM_PROCESSES>
+```
+
+Example:
+
+```bash
+mpirun -np 2 ./openmp+mpi --arg 10000000 --marker L5 --n_thr 4
+```
+
+This runs 2 MPI processes, each with 4 OpenMP threads (8 threads total).
+
+---
+
+### Run on Distributed Machines (Cluster)
+
+To run on multiple machines in a lab environment, first create a `machinefile` containing the hostnames:
+
+```
+machine1.lab.com
+machine2.lab.com
+machine3.lab.com
+```
+
+Then SSH into each machine, compile the code, and run:
+
+```bash
+mpirun -machinefile ./machinefile --mca orte_keep_fqdn_hostnames t --mca btl_tcp_if_exclude docker0,docker_gwbridge,lo -np 3 ./openmp+mpi --arg 1000000 --marker L5 --n_thr 4
+```
+
+**Explanation of flags:**
+
+* `-machinefile ./machinefile` → Use the specified machine file with host list
+* `--mca orte_keep_fqdn_hostnames t` → Keep fully qualified domain names
+* `--mca btl_tcp_if_exclude docker0,docker_gwbridge,lo` → Exclude docker and loopback interfaces from TCP communication
+* `-np 3` → Run 3 MPI processes (one per machine in this example)
+* `./openmp+mpi --arg 1000000 --marker L5 --n_thr 4` → Run the program with 1M input, label L5, and 4 threads per process
+
+**Setup steps for cluster deployment:**
+
+1. Ensure all machines are accessible via SSH
+2. Compile the code on your development machine
+3. Copy the compiled binary to all machines in the cluster:
+   ```bash
+   scp ./openmp+mpi user@machine1.lab.com:~/
+   scp ./openmp+mpi user@machine2.lab.com:~/
+   scp ./openmp+mpi user@machine3.lab.com:~/
+   ```
+4. Create and distribute the `machinefile`
+5. Run the mpirun command from any of the machines
+
+---
+
+## ⚡ Key Differences from Previous Labs
+
+| Feature | Lab 1 (MPI Reduce) | Lab 4 (OpenMP) | Lab 5 (Hybrid MPI+OpenMP) |
+|---|---|---|---|
+| Parallelism model | Distributed memory | Shared memory | Hybrid (distributed + shared) |
+| Communication | Collective reduction | None (shared variables) | Point-to-point MPI |
+| Process count | Multiple | Single (threads only) | Multiple with multiple threads each |
+| Work distribution | Static (cyclic) | Static (loop scheduling) | Static (MPI), dynamic (OpenMP) |
+| Scalability (cluster) | Good | N/A | Excellent |
+| Scalability (single machine) | Limited | Excellent | Good |
+
+---
+
+## 🎓 Key Concepts
+
+### MPI_THREAD_FUNNELED vs Other Threading Levels
+
+* `MPI_THREAD_SINGLE` → Only one thread uses MPI (most restrictive)
+* `MPI_THREAD_FUNNELED` → Only the main thread calls MPI functions
+* `MPI_THREAD_SERIALIZED` → Multiple threads call MPI, but not concurrently
+* `MPI_THREAD_MULTIPLE` → Full thread safety (least common, highest overhead)
+
 
